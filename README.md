@@ -38,4 +38,4 @@ Settings are stored in `%APPDATA%\WorkCounter\config.json`.
 python -m unittest discover -s tests
 ```
 
-Pushing a tag like `v1.0.1` builds `WorkCounter.exe` on GitHub Actions and attaches it to a release.
+Every push to `main` builds `WorkCounter.exe` on GitHub Actions and publishes it as release `v<VERSION>` (bump the `VERSION` file for a new release).

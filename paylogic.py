@@ -25,22 +25,33 @@ def is_default_workday(day: date, cfg: dict) -> bool:
     return day.weekday() in cfg["workdays"]
 
 
+def _shift(day: date, cfg: dict) -> tuple[datetime, datetime, datetime, datetime]:
+    """(start, end, break_start, break_end) for `day`; the break is clipped to the shift."""
+    start = datetime.combine(day, _parse_hhmm(cfg["start"]))
+    end = datetime.combine(day, _parse_hhmm(cfg["end"]))
+    b_start = datetime.combine(day, _parse_hhmm(cfg.get("break_start", "12:00")))
+    b_end = b_start + timedelta(minutes=cfg.get("break_minutes", 0))
+    b_start, b_end = max(b_start, start), min(b_end, end)
+    if b_end < b_start:
+        b_end = b_start
+    return start, end, b_start, b_end
+
+
+def paid_hours(cfg: dict) -> float:
+    """Paid hours in a shift: start to finish, minus the unpaid break."""
+    start, end, b_start, b_end = _shift(date(2000, 1, 3), cfg)
+    return max(0.0, ((end - start) - (b_end - b_start)).total_seconds() / 3600)
+
+
 def paid_seconds(now: datetime, cfg: dict) -> float:
-    """Paid seconds worked so far today, pausing for the unpaid break."""
-    total = cfg["hours"] * 3600
-    start = datetime.combine(now.date(), _parse_hhmm(cfg["start"]))
-    elapsed = (now - start).total_seconds()
-    if elapsed <= 0:
-        return 0.0
+    """Paid seconds worked so far today. Only runs between start and finish,
+    and pauses for the unpaid break."""
+    start, end, b_start, b_end = _shift(now.date(), cfg)
 
-    break_len = cfg.get("break_minutes", 0) * 60
-    if break_len > 0:
-        b_start = datetime.combine(now.date(), _parse_hhmm(cfg["break_start"]))
-        offset = (b_start - start).total_seconds()  # paid time before the break
-        if 0 < offset < total and elapsed > offset:
-            elapsed -= min(elapsed - offset, break_len)
+    def upto(a: datetime, b: datetime) -> float:
+        return max(0.0, (min(now, b) - a).total_seconds())
 
-    return min(elapsed, total)
+    return max(0.0, upto(start, end) - upto(b_start, b_end))
 
 
 def floor_cents(value: float) -> float:
@@ -60,7 +71,7 @@ def day_rate(day: date, cfg: dict) -> float:
 def day_pay(cfg: dict, day: date | None = None) -> float:
     """A full shift's pay (on `day`, if given, so holidays count)."""
     rate = day_rate(day, cfg) if day is not None else cfg["rate"]
-    return rate * cfg["hours"]
+    return rate * paid_hours(cfg)
 
 
 def day_earnings(day: date, now: datetime, cfg: dict) -> float:
@@ -92,14 +103,3 @@ def period_earnings(now: datetime, cfg: dict) -> float:
     return floor_cents(
         sum(day_earnings(d, now, cfg) for d in period_days(start) if d <= today)
     )
-
-
-def shift_end(day: date, cfg: dict) -> datetime:
-    start = datetime.combine(day, _parse_hhmm(cfg["start"]))
-    end = start + timedelta(hours=cfg["hours"])
-    break_len = cfg.get("break_minutes", 0)
-    if break_len > 0:
-        b_start = datetime.combine(day, _parse_hhmm(cfg["break_start"]))
-        if start < b_start < end:
-            end += timedelta(minutes=break_len)
-    return end

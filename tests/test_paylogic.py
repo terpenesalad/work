@@ -11,8 +11,8 @@ import paylogic as p  # noqa: E402
 def cfg(**kw):
     base = {
         "rate": 34.0,
-        "hours": 7.5,
         "start": "09:00",
+        "end": "16:30",
         "break_start": "12:00",
         "break_minutes": 0,
         "workdays": [0, 1, 2, 3, 4],
@@ -50,7 +50,7 @@ class DayTests(unittest.TestCase):
         self.assertEqual(p.day_earnings(date(2026, 11, 28), datetime(2026, 11, 28, 22, 0), c), 255.0)
 
     def test_break_pauses_counter(self):
-        c = cfg(start="08:30", break_minutes=30, break_start="12:00")
+        c = cfg(start="08:30", end="16:30", break_minutes=30, break_start="12:00")
         d = date(2026, 11, 25)
         at_break = p.day_earnings(d, datetime(2026, 11, 25, 12, 0), c)
         self.assertEqual(at_break, 119.0)  # 3.5h
@@ -58,7 +58,22 @@ class DayTests(unittest.TestCase):
         self.assertEqual(p.day_earnings(d, datetime(2026, 11, 25, 13, 30), c), 153.0)  # 4.5h
         self.assertEqual(p.day_earnings(d, datetime(2026, 11, 25, 16, 29), c), p.floor_cents(255.0 - 34 / 60))
         self.assertEqual(p.day_earnings(d, datetime(2026, 11, 25, 16, 30), c), 255.0)
-        self.assertEqual(p.shift_end(d, c), datetime(2026, 11, 25, 16, 30))
+        self.assertEqual(p.paid_hours(c), 7.5)
+
+    def test_stops_at_finish_time(self):
+        # 9 to 5 with a 30 min lunch = 7.5 paid hours; nothing after 5pm
+        c = cfg(start="09:00", end="17:00", break_minutes=30, break_start="12:30")
+        d = date(2026, 11, 25)
+        self.assertEqual(p.paid_hours(c), 7.5)
+        self.assertEqual(p.day_earnings(d, datetime(2026, 11, 25, 17, 0), c), 255.0)
+        self.assertEqual(p.day_earnings(d, datetime(2026, 11, 25, 17, 3, 30), c), 255.0)
+        self.assertEqual(p.day_earnings(d, datetime(2026, 11, 25, 23, 59), c), 255.0)
+
+    def test_paid_hours_from_times(self):
+        self.assertEqual(p.paid_hours(cfg()), 7.5)
+        self.assertEqual(p.paid_hours(cfg(end="17:00", break_minutes=30)), 7.5)
+        # break outside the shift doesn't count
+        self.assertEqual(p.paid_hours(cfg(break_minutes=30, break_start="18:00")), 7.5)
 
 
 class HolidayTests(unittest.TestCase):

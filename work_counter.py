@@ -57,10 +57,10 @@ def recent_wednesday(today: date) -> date:
 def default_config() -> dict:
     return {
         "rate": 34.0,
-        "hours": 7.5,
         "start": "09:00",
+        "end": "17:00",
         "break_start": "12:30",
-        "break_minutes": 0,
+        "break_minutes": 30,
         "workdays": [0, 1, 2, 3, 4],
         "payday": recent_wednesday(date.today()).isoformat(),
         "overrides": {},
@@ -76,9 +76,19 @@ def default_config() -> dict:
 def load_config() -> dict:
     cfg = default_config()
     try:
-        cfg.update(json.loads(config_path().read_text(encoding="utf-8")))
+        saved = json.loads(config_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        pass
+        return cfg
+    if "end" not in saved:
+        # v1.1 and earlier stored "paid hours" instead of a finish time.
+        # Keep the old shift for now, but ask the user to confirm their hours.
+        start = datetime.strptime(saved.get("start", "09:00"), "%H:%M")
+        extra = saved.get("break_minutes", 0) / 60
+        end = start + timedelta(hours=saved.get("hours", 7.5) + extra)
+        saved["end"] = end.strftime("%H:%M") if end.day == start.day else "23:59"
+        saved["setup_done"] = False
+    saved.pop("hours", None)
+    cfg.update(saved)
     return cfg
 
 
@@ -451,7 +461,7 @@ class SettingsDialog(Dialog):
 
         if first_run:
             self.label(
-                self, "Quick check before you start:", fg=ACCENT, font=UI,
+                self, "Check your shift times:", fg=ACCENT, font=UI,
             ).pack(anchor="w", pady=(0, 8))
 
         form = tk.Frame(self, bg=BG)
@@ -474,11 +484,18 @@ class SettingsDialog(Dialog):
             return f"{x:g}"
 
         field(0, "Hourly rate ($)", "rate", num(cfg["rate"]))
-        field(1, "Paid hours / shift", "hours", num(cfg["hours"]))
-        field(2, "Shift starts", "start", cfg["start"], "24h, e.g. 08:30")
+        field(1, "Shift starts", "start", self._show(cfg["start"]), "e.g. 9:00am")
+        field(2, "Shift finishes", "end", self._show(cfg["end"]), "e.g. 5:00pm")
         field(3, "Unpaid break (min)", "break_minutes", str(cfg["break_minutes"]), "0 = none")
-        field(4, "Break starts", "break_start", cfg["break_start"], "counter pauses")
+        field(4, "Break starts", "break_start", self._show(cfg["break_start"]), "counter pauses")
         field(5, "Public holiday ×", "holiday_multiplier", num(cfg["holiday_multiplier"]), "e.g. 2.5 = 250%")
+
+        # live summary so it's obvious what a shift pays
+        self.summary = self.label(self, "", fg=ACCENT, font=SMALL)
+        self.summary.pack(anchor="w", pady=(6, 0))
+        for k in ("rate", "start", "end", "break_minutes", "break_start"):
+            self.vars[k].trace_add("write", lambda *_: self._update_summary())
+        self._update_summary()
 
         self.label(self, "Work days", fg=MUTED).pack(anchor="w", pady=(10, 2))
         days = tk.Frame(self, bg=BG)
@@ -519,26 +536,50 @@ class SettingsDialog(Dialog):
             self.app.save()
         self.destroy()
 
-    def save(self):
+    def _read_shift(self) -> dict:
+        """Parse the shift fields; raises ValueError if anything's off."""
         v = {k: s.get().strip() for k, s in self.vars.items()}
+        rate = float(v["rate"].lstrip("$"))
+        brk = int(v["break_minutes"] or 0)
+        start = self._hhmm(v["start"])
+        end = self._hhmm(v["end"], after=start)
+        bstart = self._hhmm(v["break_start"], after=start)
+        if rate <= 0 or brk < 0 or end <= start:
+            raise ValueError
+        shift = dict(rate=rate, start=start, end=end, break_minutes=brk, break_start=bstart)
+        if p.paid_hours(shift) <= 0:
+            raise ValueError
+        return shift
+
+    def _update_summary(self):
         try:
-            rate = float(v["rate"].lstrip("$"))
-            hours = float(v["hours"])
-            brk = int(v["break_minutes"] or 0)
-            mult = float(v["holiday_multiplier"].rstrip("x×%") or 1)
+            s = self._read_shift()
+        except ValueError:
+            self.summary.config(text="", fg=ACCENT)
+            return
+        self.summary.config(
+            text=f"= {p.paid_hours(s):g} paid hours · ${money(p.day_pay(s))} a shift"
+        )
+
+    def save(self):
+        try:
+            shift = self._read_shift()
+            mult = float(self.vars["holiday_multiplier"].get().strip().rstrip("x×%") or 1)
             if mult > 10:  # typed as a percentage, e.g. 250
                 mult /= 100
-            start = self._hhmm(v["start"])
-            bstart = self._hhmm(v["break_start"])
-            if rate <= 0 or not 0 < hours <= 24 or brk < 0 or mult <= 0:
+            if mult <= 0:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Work Counter", "Check the numbers and times (HH:MM).", parent=self)
+            messagebox.showerror(
+                "Work Counter",
+                "Check the numbers and times (e.g. 9:00am, 5pm, 17:00).\n"
+                "The finish time must be after the start time.",
+                parent=self,
+            )
             return
         workdays = [i for i, d in enumerate(self.day_vars) if d.get()]
         self.app.cfg.update(
-            rate=rate, hours=hours, start=start, break_minutes=brk, break_start=bstart,
-            holiday_multiplier=mult,
+            **shift, holiday_multiplier=mult,
             workdays=workdays, payday=self.payday.get(), setup_done=True,
         )
         self.app.save()
@@ -546,10 +587,29 @@ class SettingsDialog(Dialog):
         self.destroy()
 
     @staticmethod
-    def _hhmm(text: str) -> str:
-        text = text.replace(".", ":")
-        h, m = (text.split(":") + ["0"])[:2]
-        h, m = int(h), int(m)
+    def _show(hhmm: str) -> str:
+        """'17:00' -> '5:00pm'"""
+        t = datetime.strptime(hhmm, "%H:%M")
+        return f"{t.hour % 12 or 12}:{t.minute:02d}{'am' if t.hour < 12 else 'pm'}"
+
+    @staticmethod
+    def _hhmm(text: str, after: str | None = None) -> str:
+        """Accepts 17:00, 5pm, 5:00 PM, 5.30pm, 9. Returns 'HH:MM'.
+        Without am/pm, a time that would land before `after` is read as pm."""
+        t = text.lower().replace(" ", "").replace(".", ":")
+        suffix = None
+        for s in ("am", "pm", "a", "p"):
+            if t.endswith(s):
+                suffix, t = s[0], t[: -len(s)]
+                break
+        h, m = (t.split(":") + ["0"])[:2]
+        h, m = int(h), int(m or 0)
+        if suffix:
+            if not 1 <= h <= 12:
+                raise ValueError
+            h = h % 12 + (12 if suffix == "p" else 0)
+        elif after is not None and h < 12 and f"{h:02d}:{m:02d}" <= after:
+            h += 12
         if not (0 <= h < 24 and 0 <= m < 60):
             raise ValueError
         return f"{h:02d}:{m:02d}"

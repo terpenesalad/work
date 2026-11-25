@@ -47,8 +47,20 @@ def floor_cents(value: float) -> float:
     return math.floor(value * 100 + 1e-6) / 100
 
 
-def day_pay(cfg: dict) -> float:
-    return cfg["rate"] * cfg["hours"]
+def is_holiday(day: date, cfg: dict) -> bool:
+    return day.isoformat() in cfg.get("holidays", [])
+
+
+def day_rate(day: date, cfg: dict) -> float:
+    """Hourly rate for `day`, with the public holiday multiplier applied."""
+    mult = cfg.get("holiday_multiplier", 2.5) if is_holiday(day, cfg) else 1.0
+    return cfg["rate"] * mult
+
+
+def day_pay(cfg: dict, day: date | None = None) -> float:
+    """A full shift's pay (on `day`, if given, so holidays count)."""
+    rate = day_rate(day, cfg) if day is not None else cfg["rate"]
+    return rate * cfg["hours"]
 
 
 def day_earnings(day: date, now: datetime, cfg: dict) -> float:
@@ -57,10 +69,10 @@ def day_earnings(day: date, now: datetime, cfg: dict) -> float:
         return 0.0
     today = now.date()
     if day < today:
-        return day_pay(cfg)
+        return day_pay(cfg, day)
     if day > today:
         return 0.0
-    return floor_cents(cfg["rate"] * paid_seconds(now, cfg) / 3600)
+    return floor_cents(day_rate(day, cfg) * paid_seconds(now, cfg) / 3600)
 
 
 def period_start(day: date, cfg: dict) -> date:

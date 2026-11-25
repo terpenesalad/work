@@ -61,6 +61,28 @@ class DayTests(unittest.TestCase):
         self.assertEqual(p.shift_end(d, c), datetime(2026, 11, 25, 16, 30))
 
 
+class HolidayTests(unittest.TestCase):
+    def test_full_holiday_shift(self):
+        c = cfg(holidays=["2026-11-25"])
+        self.assertEqual(p.day_earnings(date(2026, 11, 25), datetime(2026, 11, 25, 22, 0), c), 637.5)
+
+    def test_holiday_runs_faster(self):
+        c = cfg(holidays=["2026-11-25"])
+        self.assertEqual(p.day_earnings(date(2026, 11, 25), datetime(2026, 11, 25, 10, 0), c), 85.0)
+
+    def test_custom_multiplier(self):
+        c = cfg(holidays=["2026-11-25"], holiday_multiplier=2.25)
+        self.assertEqual(p.day_pay(c, date(2026, 11, 25)), 573.75)
+
+    def test_voided_holiday_is_zero(self):
+        c = cfg(holidays=["2026-11-25"], overrides={"2026-11-25": False})
+        self.assertEqual(p.day_earnings(date(2026, 11, 25), datetime(2026, 11, 25, 22, 0), c), 0)
+
+    def test_holiday_in_period(self):
+        c = cfg(holidays=["2026-11-26"])
+        self.assertEqual(p.period_earnings(datetime(2026, 12, 8, 23, 0), c), 2550.0 - 255 + 637.5)
+
+
 class PeriodTests(unittest.TestCase):
     def test_period_start_on_payday(self):
         self.assertEqual(p.period_start(date(2026, 11, 25), cfg()), date(2026, 11, 25))

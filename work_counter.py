@@ -24,6 +24,7 @@ FG = "#f2f3f5"
 MUTED = "#8a8f98"
 DIM = "#4b5059"
 ACCENT = "#4ade80"
+HOLIDAY = "#fbbf24"
 PANEL = "#1d2027"
 
 if IS_WIN:
@@ -63,6 +64,8 @@ def default_config() -> dict:
         "workdays": [0, 1, 2, 3, 4],
         "payday": recent_wednesday(date.today()).isoformat(),
         "overrides": {},
+        "holidays": [],
+        "holiday_multiplier": 2.5,
         "topmost": True,
         "x": None,
         "y": None,
@@ -244,7 +247,10 @@ class Widget:
         period = p.period_earnings(now, self.cfg)
 
         counted = p.is_counted(today, self.cfg)
-        if counted:
+        holiday = counted and p.is_holiday(today, self.cfg)
+        if holiday:
+            note = f"public hol. ×{self.cfg['holiday_multiplier']:g} · "
+        elif counted:
             note = ""
         elif p.is_default_workday(today, self.cfg):
             note = "voided · "
@@ -252,7 +258,7 @@ class Widget:
             note = "day off · "
 
         self.amount.config(text=money(earned), fg=FG if counted else DIM)
-        self.dollar.config(fg=ACCENT if counted else DIM)
+        self.dollar.config(fg=(HOLIDAY if holiday else ACCENT) if counted else DIM)
         self.sub.config(text=f"{note}this fortnight ${money(period)}")
         if reschedule:
             self.root.after(1000, self.tick)
@@ -264,10 +270,27 @@ class Widget:
             ov.pop(key, None)
         else:
             ov[key] = counted
-        # forget overrides from old pay periods
+        self._commit()
+
+    def set_holiday(self, day: date, on: bool):
+        hols = self.cfg.setdefault("holidays", [])
+        key = day.isoformat()
+        if on and key not in hols:
+            hols.append(key)
+        elif not on and key in hols:
+            hols.remove(key)
+        if on and not p.is_counted(day, self.cfg):
+            self.set_counted(day, True)  # marking a holiday means you're working it
+        else:
+            self._commit()
+
+    def _commit(self):
+        # forget day edits from old pay periods
         cutoff = (p.period_start(date.today(), self.cfg) - timedelta(days=p.PERIOD_DAYS)).isoformat()
+        ov = self.cfg.setdefault("overrides", {})
         for k in [k for k in ov if k < cutoff]:
             del ov[k]
+        self.cfg["holidays"] = sorted(k for k in self.cfg.get("holidays", []) if k >= cutoff)
         self.save()
         self.refresh()
 
@@ -280,6 +303,11 @@ class Widget:
             m.add_command(label="Void today", command=lambda: self.set_counted(today, False))
         else:
             m.add_command(label="Count today as worked", command=lambda: self.set_counted(today, True))
+        self._hol = tk.BooleanVar(value=p.is_holiday(today, self.cfg))
+        m.add_checkbutton(
+            label=f"Public holiday today (×{self.cfg['holiday_multiplier']:g})", variable=self._hol,
+            command=lambda: self.set_holiday(today, self._hol.get()),
+        )
         m.add_command(label="Days this fortnight…", command=self.open_days)
         m.add_command(label="Settings…", command=self.open_settings)
         m.add_separator()
@@ -384,23 +412,30 @@ class DaysDialog(Dialog):
 
         grid = tk.Frame(self.body, bg=BG)
         grid.pack(fill="x")
-        for i, d in enumerate(days):
+        self.label(grid, "worked", fg=MUTED, font=SMALL).grid(row=0, column=0, sticky="w")
+        self.label(grid, f"public hol. ×{cfg['holiday_multiplier']:g}", fg=MUTED, font=SMALL).grid(
+            row=0, column=1, padx=(16, 0))
+        for i, d in enumerate(days, start=1):
             var = tk.BooleanVar(value=p.is_counted(d, cfg))
             text = f"{d:%a %d %b}" + ("  · today" if d == now.date() else "")
             cb = self.check(grid, text, var, command=lambda d=d, v=var: self.app.set_counted(d, v.get()))
             cb.grid(row=i, column=0, sticky="w")
+            hol = tk.BooleanVar(value=p.is_holiday(d, cfg))
+            self.check(grid, "", hol, command=lambda d=d, v=hol: self.app.set_holiday(d, v.get())).grid(
+                row=i, column=1, padx=(16, 0))
             amt = p.day_earnings(d, now, cfg) if d <= now.date() else 0.0
+            colour = HOLIDAY if p.is_holiday(d, cfg) else FG
             if p.is_counted(d, cfg) and d > now.date():
-                txt, colour = f"${money(p.day_pay(cfg))}", DIM
+                txt, colour = f"${money(p.day_pay(cfg, d))}", (HOLIDAY if p.is_holiday(d, cfg) else DIM)
             elif p.is_counted(d, cfg):
-                txt, colour = f"${money(amt)}", FG
+                txt = f"${money(amt)}"
             else:
                 txt, colour = "—", DIM
-            self.label(grid, txt, fg=colour).grid(row=i, column=1, sticky="e", padx=(24, 0))
+            self.label(grid, txt, fg=colour).grid(row=i, column=2, sticky="e", padx=(16, 0))
 
         counted = sum(p.is_counted(d, cfg) for d in days)
         earned = sum(p.day_earnings(d, now, cfg) for d in days if d <= now.date())
-        full = counted * p.day_pay(cfg)
+        full = sum(p.day_pay(cfg, d) for d in days if p.is_counted(d, cfg))
         foot = tk.Frame(self.body, bg=BG)
         foot.pack(fill="x", pady=(10, 0))
         self.label(foot, f"Earned so far  ${money(earned)}", fg=MUTED, font=SMALL).pack(anchor="w")
@@ -443,6 +478,7 @@ class SettingsDialog(Dialog):
         field(2, "Shift starts", "start", cfg["start"], "24h, e.g. 08:30")
         field(3, "Unpaid break (min)", "break_minutes", str(cfg["break_minutes"]), "0 = none")
         field(4, "Break starts", "break_start", cfg["break_start"], "counter pauses")
+        field(5, "Public holiday ×", "holiday_multiplier", num(cfg["holiday_multiplier"]), "e.g. 2.5 = 250%")
 
         self.label(self, "Work days", fg=MUTED).pack(anchor="w", pady=(10, 2))
         days = tk.Frame(self, bg=BG)
@@ -489,9 +525,12 @@ class SettingsDialog(Dialog):
             rate = float(v["rate"].lstrip("$"))
             hours = float(v["hours"])
             brk = int(v["break_minutes"] or 0)
+            mult = float(v["holiday_multiplier"].rstrip("x×%") or 1)
+            if mult > 10:  # typed as a percentage, e.g. 250
+                mult /= 100
             start = self._hhmm(v["start"])
             bstart = self._hhmm(v["break_start"])
-            if rate <= 0 or not 0 < hours <= 24 or brk < 0:
+            if rate <= 0 or not 0 < hours <= 24 or brk < 0 or mult <= 0:
                 raise ValueError
         except ValueError:
             messagebox.showerror("Work Counter", "Check the numbers and times (HH:MM).", parent=self)
@@ -499,6 +538,7 @@ class SettingsDialog(Dialog):
         workdays = [i for i, d in enumerate(self.day_vars) if d.get()]
         self.app.cfg.update(
             rate=rate, hours=hours, start=start, break_minutes=brk, break_start=bstart,
+            holiday_multiplier=mult,
             workdays=workdays, payday=self.payday.get(), setup_done=True,
         )
         self.app.save()

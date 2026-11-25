@@ -1,6 +1,6 @@
 # Work Counter
 
-A tiny always-on-top desktop widget that counts up what you've earned today, live, while your shift runs. A smaller line underneath shows the running total for the current pay fortnight.
+A tiny always-on-top desktop widget (with a hammer and sickle ☭) that counts up what you've earned today, live, while your shift runs. A smaller line underneath shows the running total for the current pay fortnight.
 
 ```
  $ 166.65
@@ -38,5 +38,7 @@ Settings are stored in `%APPDATA%\WorkCounter\config.json`.
 ```
 python -m unittest discover -s tests
 ```
+
+The hammer and sickle is drawn by `tools/make_emblem.py` (needs Pillow) and baked into `emblem_data.py`, so the app itself has no dependencies.
 
 Every push to `main` builds `WorkCounter.exe` on GitHub Actions and publishes it as release `v<VERSION>` (bump the `VERSION` file for a new release).

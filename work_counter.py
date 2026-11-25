@@ -12,8 +12,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import messagebox
 
+import emblem_data
 import paylogic as p
 
 APP = "WorkCounter"
@@ -25,19 +27,18 @@ MUTED = "#8a8f98"
 DIM = "#4b5059"
 ACCENT = "#4ade80"
 HOLIDAY = "#fbbf24"
-RED = "#e5322d"
 PANEL = "#1d2027"
 
 if IS_WIN:
     BIG = ("Segoe UI Semibold", 26)
     SMALL = ("Segoe UI", 10)
-    EMBLEM = ("Segoe UI Symbol", 25)
     UI = ("Segoe UI", 10)
+    CAP = 0.65  # cap height / font ascent, for lining things up
 else:
     BIG = ("DejaVu Sans", 24, "bold")
     SMALL = ("DejaVu Sans", 9)
-    EMBLEM = ("DejaVu Sans", 27)
     UI = ("DejaVu Sans", 10)
+    CAP = 0.78
 
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -193,21 +194,10 @@ class Widget:
         root.attributes("-alpha", 0.95)
         root.attributes("-topmost", bool(self.cfg["topmost"]))
 
-        box = tk.Frame(root, bg=BG, padx=18, pady=10)
-        box.pack()
-        row = tk.Frame(box, bg=BG)
-        row.pack(anchor="w")
-        self.emblem = tk.Label(row, text="☭", font=EMBLEM, fg=RED, bg=BG)  # ☭
-        self.emblem.pack(side="left", padx=(0, 10))
-        self.dollar = tk.Label(row, text="$", font=BIG, fg=ACCENT, bg=BG)
-        self.dollar.pack(side="left")
-        self.amount = tk.Label(row, text="0.00", font=BIG, fg=FG, bg=BG)
-        self.amount.pack(side="left")
-        self.sub = tk.Label(box, text="", font=SMALL, fg=MUTED, bg=BG)
-        self.sub.pack(anchor="w", pady=(0, 2))
+        self._build_face()
 
         self.menu = tk.Menu(root, tearoff=0)
-        for w in (root, box, row, self.emblem, self.dollar, self.amount, self.sub):
+        for w in (root, self.canvas):
             w.bind("<ButtonPress-1>", self._press)
             w.bind("<B1-Motion>", self._drag)
             w.bind("<ButtonRelease-1>", self._release)
@@ -222,6 +212,48 @@ class Widget:
 
         if not self.cfg.get("setup_done"):
             root.after(300, lambda: self.open_settings(first_run=True))
+
+    # -- drawing
+    def _build_face(self):
+        """Everything is drawn on one canvas so spacing is exact:
+
+            [hammer]  $ 123.45
+            [sickle]  this fortnight $1,234.56
+        """
+        root = self.root
+        s = root.winfo_fpixels("1i") / 96  # display scaling
+        fb, fs = tkfont.Font(root, font=BIG), tkfont.Font(root, font=SMALL)
+        self._fb = fb
+        pad_x, pad_y = round(16 * s), round(13 * s)
+
+        cap_big = fb.metrics("ascent") * CAP
+        cap_small = fs.metrics("ascent") * CAP
+        base1 = pad_y + cap_big                       # baseline of the big number
+        base2 = base1 + round(11 * s) + cap_small      # baseline of the small line
+        block = base2 - pad_y                         # height of the two lines of text
+
+        size = max([k for k in emblem_data.PNG if k <= block + 6] or [min(emblem_data.PNG)])
+        self._emblem_img = tk.PhotoImage(data=emblem_data.PNG[size])
+
+        self.canvas = c = tk.Canvas(root, bg=BG, highlightthickness=0, bd=0)
+        c.pack()
+        c.create_image(pad_x, pad_y + block / 2, image=self._emblem_img, anchor="w")
+        tx = pad_x + size + round(12 * s)
+        self.dollar = c.create_text(tx, base1 - fb.metrics("ascent"), text="$", font=BIG, fill=ACCENT, anchor="nw")
+        self.amount = c.create_text(c.bbox(self.dollar)[2] + round(1 * s), base1 - fb.metrics("ascent"),
+                                    text="0.00", font=BIG, fill=FG, anchor="nw")
+        self.sub = c.create_text(tx, base2 - fs.metrics("ascent"), text="", font=SMALL, fill=MUTED, anchor="nw")
+        self._pad_x = pad_x
+        self._height = round(base2 + fs.metrics("descent") + pad_y * 0.7)
+
+    def _set_face(self, amount: str, sub: str, amount_fg: str, dollar_fg: str):
+        c = self.canvas
+        c.itemconfig(self.amount, text=amount, fill=amount_fg)
+        c.itemconfig(self.dollar, fill=dollar_fg)
+        c.itemconfig(self.sub, text=sub)
+        width = max(c.bbox(self.amount)[2], c.bbox(self.sub)[2]) + self._pad_x
+        if (width, self._height) != (int(c.cget("width")), int(c.cget("height"))):
+            c.config(width=width, height=self._height)
 
     # -- position / dragging
     def _place(self):
@@ -272,9 +304,10 @@ class Widget:
         else:
             note = "day off · "
 
-        self.amount.config(text=money(earned), fg=FG if counted else DIM)
-        self.dollar.config(fg=(HOLIDAY if holiday else ACCENT) if counted else DIM)
-        self.sub.config(text=f"{note}this fortnight ${money(period)}")
+        self._set_face(
+            money(earned), f"{note}this fortnight ${money(period)}",
+            FG if counted else DIM, (HOLIDAY if holiday else ACCENT) if counted else DIM,
+        )
         if reschedule:
             self.root.after(1000, self.tick)
 

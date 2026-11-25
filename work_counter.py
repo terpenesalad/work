@@ -218,7 +218,7 @@ class Widget:
         """Everything is drawn on one canvas so spacing is exact:
 
             [hammer]  $ 123.45
-            [sickle]  this fortnight $1,234.56
+            [sickle]  fortnightly payslip
         """
         root = self.root
         s = root.winfo_fpixels("1i") / 96  # display scaling
@@ -290,7 +290,8 @@ class Widget:
     def tick(self, reschedule: bool = True):
         now = datetime.now()
         today = now.date()
-        earned = p.day_earnings(today, now, self.cfg)
+        # the big number is the payslip so far: every shift this fortnight plus
+        # today's running amount. It goes back to $0 on payday.
         period = p.period_earnings(now, self.cfg)
 
         counted = p.is_counted(today, self.cfg)
@@ -305,8 +306,8 @@ class Widget:
             note = "day off · "
 
         self._set_face(
-            money(earned), f"{note}this fortnight ${money(period)}",
-            FG if counted else DIM, (HOLIDAY if holiday else ACCENT) if counted else DIM,
+            money(period), f"{note}fortnightly payslip",
+            FG, (HOLIDAY if holiday else ACCENT) if counted else DIM,
         )
         if reschedule:
             self.root.after(1000, self.tick)

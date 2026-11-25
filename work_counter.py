@@ -25,15 +25,18 @@ MUTED = "#8a8f98"
 DIM = "#4b5059"
 ACCENT = "#4ade80"
 HOLIDAY = "#fbbf24"
+RED = "#e5322d"
 PANEL = "#1d2027"
 
 if IS_WIN:
     BIG = ("Segoe UI Semibold", 26)
     SMALL = ("Segoe UI", 10)
+    EMBLEM = ("Segoe UI Symbol", 25)
     UI = ("Segoe UI", 10)
 else:
     BIG = ("DejaVu Sans", 24, "bold")
     SMALL = ("DejaVu Sans", 9)
+    EMBLEM = ("DejaVu Sans", 27)
     UI = ("DejaVu Sans", 10)
 
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -194,6 +197,8 @@ class Widget:
         box.pack()
         row = tk.Frame(box, bg=BG)
         row.pack(anchor="w")
+        self.emblem = tk.Label(row, text="☭", font=EMBLEM, fg=RED, bg=BG)  # ☭
+        self.emblem.pack(side="left", padx=(0, 10))
         self.dollar = tk.Label(row, text="$", font=BIG, fg=ACCENT, bg=BG)
         self.dollar.pack(side="left")
         self.amount = tk.Label(row, text="0.00", font=BIG, fg=FG, bg=BG)
@@ -202,7 +207,7 @@ class Widget:
         self.sub.pack(anchor="w", pady=(0, 2))
 
         self.menu = tk.Menu(root, tearoff=0)
-        for w in (root, box, row, self.dollar, self.amount, self.sub):
+        for w in (root, box, row, self.emblem, self.dollar, self.amount, self.sub):
             w.bind("<ButtonPress-1>", self._press)
             w.bind("<B1-Motion>", self._drag)
             w.bind("<ButtonRelease-1>", self._release)
